@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bluenviron/gortsplib/v5"
 	"github.com/joho/godotenv"
 
 	"github.com/gorilla/websocket"
@@ -464,6 +465,21 @@ func main() {
 
 	flag.Parse()
 
+	h := &serverHandler{}
+	h.server = &gortsplib.Server{
+		Handler:           h,
+		RTSPAddress:       ":8554",
+		UDPRTPAddress:     ":8000",
+		UDPRTCPAddress:    ":8001",
+		MulticastIPRange:  "224.1.0.0/16",
+		MulticastRTPPort:  8002,
+		MulticastRTCPPort: 8003,
+	}
+	go func() {
+		h.server.StartAndWait()
+	}()
+
+	time.Sleep(10 * time.Second)
 	if *debug {
 		log.SetLevel(logrus.DebugLevel)
 	}
