@@ -2,401 +2,450 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 
-	"github.com/pion/rtp"
-
-	"github.com/bluenviron/gortsplib/v5"
-	"github.com/bluenviron/gortsplib/v5/pkg/base"
-	"github.com/bluenviron/gortsplib/v5/pkg/description"
-	"github.com/bluenviron/gortsplib/v5/pkg/format"
+	"github.com/gorilla/websocket"
+	"github.com/sirupsen/logrus"
 )
 
-// WSSClient WebSocket 客户端
-type WSSClient struct {
-	BaseURL         string
-	Username        string
-	Password        string
-	CameraID        string
-	Channel         string
-	VideoCodec      string
-	httpClient      *http.Client
-	cookieJar       *cookiejar.Jar
-	waitingKeyframe bool
+var log = logrus.New()
+
+func init() {
+	log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
+	log.SetLevel(logrus.InfoLevel)
 }
 
-// LoginRequest 登录请求结构
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+// RTSPBridge 结构体
+type RTSPBridge struct {
+	baseURL            string
+	username           string
+	password           string
+	cameraID           string
+	channel            string
+	videoCodec         string
+	rtspPort           string
+	httpClient         *http.Client
+	process            *exec.Cmd
+	stdin              io.WriteCloser
+	waitingForKeyframe bool
+	mu                 sync.Mutex
+	ctx                context.Context
+	cancel             context.CancelFunc
 }
 
-// LoginResponse 登录响应结构
-type LoginResponse struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+// NewRTSPBridge 创建新的 RTSP 桥接实例
+func NewRTSPBridge(baseURL, username, password, cameraID, channel, videoCodec, rtspPort string) *RTSPBridge {
+	jar, _ := cookiejar.New(nil)
+
+	// 创建 HTTP 客户端,跳过 SSL 验证
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	client := &http.Client{
+		Transport: tr,
+		Jar:       jar,
+		Timeout:   30 * time.Second,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &RTSPBridge{
+		baseURL:            baseURL,
+		username:           username,
+		password:           password,
+		cameraID:           cameraID,
+		channel:            channel,
+		videoCodec:         videoCodec,
+		rtspPort:           rtspPort,
+		httpClient:         client,
+		waitingForKeyframe: true,
+		ctx:                ctx,
+		cancel:             cancel,
+	}
 }
 
-// NewWSSClient 创建新的 WSS 客户端
-func NewWSSClient(baseURL, username, password, cameraID, channel, videoCodec string) (*WSSClient, error) {
-	jar, err := cookiejar.New(nil)
+// Login 登录并获取访问令牌
+func (r *RTSPBridge) Login() error {
+	loginURL := fmt.Sprintf("%s/api/auth/login", r.baseURL)
+
+	payload := map[string]string{
+		"username": r.username,
+		"password": r.password,
+	}
+
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cookie jar: %w", err)
+		return fmt.Errorf("marshal login payload: %w", err)
 	}
 
-	client := &WSSClient{
-		BaseURL:         baseURL,
-		Username:        username,
-		Password:        password,
-		CameraID:        cameraID,
-		Channel:         channel,
-		VideoCodec:      videoCodec,
-		cookieJar:       jar,
-		waitingKeyframe: true,
-		httpClient: &http.Client{
-			Jar: jar,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-			Timeout: 30 * time.Second,
-		},
-	}
-
-	return client, nil
-}
-
-// Login 登录并获取认证
-func (c *WSSClient) Login() error {
-	loginURL := fmt.Sprintf("%s/api/auth/login", c.BaseURL)
-
-	loginReq := LoginRequest{
-		Username: c.Username,
-		Password: c.Password,
-	}
-
-	jsonData, err := json.Marshal(loginReq)
+	resp, err := r.httpClient.Post(loginURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("failed to marshal login request: %w", err)
-	}
-
-	resp, err := c.httpClient.Post(loginURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("login request failed: %w", err)
+		return fmt.Errorf("login request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("login failed: status=%d, body=%s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("login failed: %d - %s", resp.StatusCode, string(body))
 	}
 
-	log.Printf("Login successful: %s", string(body))
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode login response: %w", err)
+	}
+
+	log.Infof("Login successful: %v", result)
 
 	// 检查登录状态
-	statusURL := fmt.Sprintf("%s/api/miot/login_status", c.BaseURL)
-	statusResp, err := c.httpClient.Get(statusURL)
+	statusURL := fmt.Sprintf("%s/api/miot/login_status", r.baseURL)
+	statusResp, err := r.httpClient.Get(statusURL)
 	if err != nil {
-		return fmt.Errorf("login status check failed: %w", err)
+		return fmt.Errorf("login status check: %w", err)
 	}
 	defer statusResp.Body.Close()
 
 	if statusResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("login status check failed: status=%d", statusResp.StatusCode)
+		return fmt.Errorf("login status check failed: %d", statusResp.StatusCode)
 	}
 
 	return nil
 }
 
-// isKeyframe 检查是否为关键帧
-func (c *WSSClient) isKeyframe(data []byte) bool {
-	if c.VideoCodec == "h264" {
-		for i := 0; i < len(data)-4; i++ {
-			if data[i] == 0x00 && data[i+1] == 0x00 &&
-				((data[i+2] == 0x00 && data[i+3] == 0x01) || data[i+2] == 0x01) {
-				var nalUnitType byte
-				if data[i+2] == 0x01 {
-					nalUnitType = data[i+3] & 0x1f
-				} else {
-					nalUnitType = data[i+4] & 0x1f
+// StartFFmpeg 启动 FFmpeg 作为 RTSP 服务端
+func (r *RTSPBridge) StartFFmpeg() error {
+	// FFmpeg 命令:作为 RTSP 服务端监听端口
+	args := []string{
+		"-y",
+		"-v", "warning", // 改为 warning 级别以获取更多信息
+		"-hide_banner",
+		"-use_wallclock_as_timestamps", "1",
+		"-analyzeduration", "20000000",
+		"-probesize", "20000000",
+		"-f", r.videoCodec,
+		"-i", "pipe:0",
+		"-c:v", "copy",
+		"-c:a", "copy",
+		"-f", "rtsp",
+		"-rtsp_transport", "tcp",
+		fmt.Sprintf("rtsp://127.0.0.1:%s/live", r.rtspPort),
+	}
+
+	log.Infof("Starting FFmpeg as RTSP server on port %s: ffmpeg %s", r.rtspPort, strings.Join(args, " "))
+
+	r.process = exec.CommandContext(r.ctx, "D:\\Program_Private\\ffmpeg\\ffmpeg.exe", args...)
+
+	stdin, err := r.process.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("create stdin pipe: %w", err)
+	}
+	r.stdin = stdin
+
+	// 捕获 stderr 用于调试
+	stderr, err := r.process.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("create stderr pipe: %w", err)
+	}
+
+	if err := r.process.Start(); err != nil {
+		return fmt.Errorf("start ffmpeg: %w", err)
+	}
+
+	// 启动协程实时读取 stderr
+	go func() {
+		scanner := io.Reader(stderr)
+		buf := make([]byte, 1024)
+		for {
+			n, err := scanner.Read(buf)
+			if n > 0 {
+				log.Warnf("FFmpeg: %s", string(buf[:n]))
+			}
+			if err != nil {
+				if err != io.EOF {
+					log.Errorf("Error reading FFmpeg stderr: %v", err)
 				}
-				return nalUnitType == 5
+				break
 			}
 		}
-		return false
-	} else if c.VideoCodec == "hevc" {
-		for i := 0; i < len(data)-6; i++ {
-			if data[i] == 0x00 && data[i+1] == 0x00 &&
-				((data[i+2] == 0x00 && data[i+3] == 0x01) || data[i+2] == 0x01) {
-				var nalStart int
-				if data[i+2] == 0x01 {
-					nalStart = i + 3
-				} else {
-					nalStart = i + 4
+	}()
+
+	// 监控 FFmpeg 进程状态
+	go func() {
+		err := r.process.Wait()
+		if err != nil {
+			log.Errorf("FFmpeg process exited with error: %v", err)
+		} else {
+			log.Warn("FFmpeg process exited normally")
+		}
+		r.mu.Lock()
+		r.stdin = nil
+		r.process = nil
+		r.mu.Unlock()
+	}()
+
+	// 等待 FFmpeg 启动
+	time.Sleep(2 * time.Second)
+
+	log.Infof("FFmpeg started. RTSP stream available at rtsp://<your-ip>:%s/live", r.rtspPort)
+	return nil
+}
+
+// StopFFmpeg 停止 FFmpeg 进程
+func (r *RTSPBridge) StopFFmpeg() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.stdin != nil {
+		r.stdin.Close()
+		r.stdin = nil
+	}
+
+	if r.process != nil && r.process.Process != nil {
+		r.process.Process.Signal(syscall.SIGTERM)
+
+		// 等待进程结束,超时后强制杀死
+		done := make(chan error, 1)
+		go func() {
+			done <- r.process.Wait()
+		}()
+
+		select {
+		case <-done:
+			log.Info("FFmpeg process terminated gracefully")
+		case <-time.After(5 * time.Second):
+			log.Warn("FFmpeg process did not terminate, killing...")
+			r.process.Process.Kill()
+		}
+
+		r.process = nil
+	}
+}
+
+// IsKeyframe 检测是否为关键帧
+func (r *RTSPBridge) IsKeyframe(data []byte) bool {
+	if r.videoCodec == "h264" {
+		return r.isH264Keyframe(data)
+	} else if r.videoCodec == "hevc" {
+		return r.isHEVCKeyframe(data)
+	}
+	return true
+}
+
+// isH264Keyframe 检测 H264 关键帧
+func (r *RTSPBridge) isH264Keyframe(data []byte) bool {
+	i := 0
+	for i < len(data)-4 {
+		if data[i] == 0x00 && data[i+1] == 0x00 {
+			var nalUnitType byte
+			if data[i+2] == 0x00 && data[i+3] == 0x01 {
+				if i+4 < len(data) {
+					nalUnitType = data[i+4] & 0x1f
 				}
+			} else if data[i+2] == 0x01 {
+				if i+3 < len(data) {
+					nalUnitType = data[i+3] & 0x1f
+				}
+			}
+
+			// NAL unit type 5 表示 IDR 帧(关键帧)
+			if nalUnitType == 5 {
+				return true
+			}
+		}
+		i++
+	}
+	return false
+}
+
+// isHEVCKeyframe 检测 HEVC 关键帧
+func (r *RTSPBridge) isHEVCKeyframe(data []byte) bool {
+	i := 0
+	for i < len(data)-6 {
+		if data[i] == 0x00 && data[i+1] == 0x00 {
+			var nalStart int
+			if data[i+2] == 0x00 && data[i+3] == 0x01 {
+				nalStart = i + 4
+			} else if data[i+2] == 0x01 {
+				nalStart = i + 3
+			} else {
+				i++
+				continue
+			}
+
+			if nalStart < len(data) {
 				nalUnitType := (data[nalStart] >> 1) & 0x3f
+				// NAL unit type 16-20 表示关键帧
 				if nalUnitType >= 16 && nalUnitType <= 20 {
 					return true
 				}
 			}
 		}
-		return false
+		i++
 	}
-	return true
+	return false
 }
 
-// Run 运行 WebSocket 拉流
-func (c *WSSClient) Run() error {
-	// 先登录
-	if err := c.Login(); err != nil {
-		return fmt.Errorf("login failed: %w", err)
+// Run 主循环:连接 WebSocket 并传输数据
+func (r *RTSPBridge) Run() error {
+	if err := r.StartFFmpeg(); err != nil {
+		return fmt.Errorf("start ffmpeg: %w", err)
+	}
+	defer r.StopFFmpeg()
+
+	if err := r.Login(); err != nil {
+		return fmt.Errorf("login: %w", err)
 	}
 
 	// 构建 WebSocket URL
-	protocol := "ws"
-	if strings.HasPrefix(c.BaseURL, "https") {
-		protocol = "wss"
+	protocol := "wss"
+	if strings.HasPrefix(r.baseURL, "http://") {
+		protocol = "ws"
 	}
-	host := strings.TrimPrefix(c.BaseURL, "https://")
+	host := strings.TrimPrefix(r.baseURL, "https://")
 	host = strings.TrimPrefix(host, "http://")
 
 	wsURL := fmt.Sprintf("%s://%s/api/miot/ws/video_stream?camera_id=%s&channel=%s",
-		protocol, host, c.CameraID, c.Channel)
+		protocol, host, r.cameraID, r.channel)
 
-	log.Printf("Connecting to WebSocket: %s", wsURL)
+	log.Infof("Connecting to WebSocket: %s", wsURL)
 
-	// 设置 WebSocket Dialer
+	// 创建 WebSocket 拨号器
 	dialer := websocket.Dialer{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		Jar:             c.cookieJar,
+		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
+		HandshakeTimeout: 30 * time.Second,
 	}
 
-	// 解析 URL 并设置 cookies
-	u, err := url.Parse(c.BaseURL)
+	// 从 HTTP 客户端获取 Cookie
+	headers := http.Header{}
+	if jar := r.httpClient.Jar; jar != nil {
+		u := fmt.Sprintf("%s/api/miot/ws/video_stream", r.baseURL)
+		parsedURL, _ := url.Parse(u)
+		if parsedURL != nil {
+			cookies := jar.Cookies(parsedURL)
+			for _, cookie := range cookies {
+				headers.Add("Cookie", fmt.Sprintf("%s=%s", cookie.Name, cookie.Value))
+			}
+		}
+	}
+
+	ws, _, err := dialer.Dial(wsURL, headers)
 	if err != nil {
-		return fmt.Errorf("failed to parse base URL: %w", err)
+		return fmt.Errorf("websocket dial: %w", err)
 	}
+	defer ws.Close()
 
-	// 获取 cookies
-	cookies := c.cookieJar.Cookies(u)
-
-	// 设置请求头
-	header := http.Header{}
-	for _, cookie := range cookies {
-		header.Add("Cookie", fmt.Sprintf("%s=%s", cookie.Name, cookie.Value))
-	}
-
-	// 连接 WebSocket
-	conn, _, err := dialer.Dial(wsURL, header)
-	if err != nil {
-		return fmt.Errorf("failed to connect to WebSocket: %w", err)
-	}
-	defer conn.Close()
-
-	log.Println("WebSocket connected. Streaming data...")
+	log.Info("WebSocket connected. Streaming data...")
 
 	// 设置读取超时
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 
-	// 读取数据流
 	for {
-		messageType, data, err := conn.ReadMessage()
+		select {
+		case <-r.ctx.Done():
+			return nil
+		default:
+		}
+
+		messageType, message, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				log.Println("WebSocket connection closed normally")
+				log.Info("WebSocket connection closed normally")
 				return nil
 			}
-			return fmt.Errorf("failed to read message: %w", err)
+			return fmt.Errorf("read message: %w", err)
 		}
 
 		// 重置读取超时
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 		if messageType == websocket.BinaryMessage {
-			dataLen := len(data)
+			dataLen := len(message)
 			if dataLen >= 100 {
-				log.Printf("Received binary data: %d bytes", dataLen)
+				log.Debugf("Received binary data: %d bytes", dataLen)
 			}
 
 			// 等待关键帧
-			if c.waitingKeyframe {
-				if c.isKeyframe(data) {
-					log.Println("Keyframe detected! Starting stream...")
-					c.waitingKeyframe = false
+			if r.waitingForKeyframe {
+				if r.IsKeyframe(message) {
+					log.Info("Keyframe detected! Starting stream...")
+					r.waitingForKeyframe = false
 				} else {
-					log.Println("Skipping non-keyframe data...")
+					log.Debug("Skipping non-keyframe data...")
 					continue
 				}
 			}
 
-			// 这里可以处理接收到的视频数据
-			// 例如：写入文件、发送到其他服务等
-			// processData(data)
+			// 写入数据到 FFmpeg stdin
+			if err := r.WriteData(message); err != nil {
+				log.Errorf("Failed to write data to FFmpeg: %v", err)
+				log.Info("Attempting to restart FFmpeg...")
 
-		} else {
-			log.Printf("Received non-binary message type: %d", messageType)
+				// 尝试重启 FFmpeg
+				r.StopFFmpeg()
+				time.Sleep(1 * time.Second)
+
+				if err := r.StartFFmpeg(); err != nil {
+					return fmt.Errorf("failed to restart FFmpeg: %w", err)
+				}
+
+				// 重新等待关键帧
+				r.waitingForKeyframe = true
+				log.Info("FFmpeg restarted, waiting for keyframe...")
+				continue
+			}
 		}
 	}
 }
 
-type serverHandler struct {
-	server    *gortsplib.Server
-	mutex     sync.RWMutex
-	stream    *gortsplib.ServerStream
-	publisher *gortsplib.ServerSession
-}
+// WriteData 写入数据到 FFmpeg stdin
+func (r *RTSPBridge) WriteData(data []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-func (sh *serverHandler) OnConnOpen(_ *gortsplib.ServerHandlerOnConnOpenCtx) {
-	log.Printf("conn opened")
-}
-
-// OnConnClose called when a connection is closed.
-func (sh *serverHandler) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
-	log.Printf("conn closed (%v)", ctx.Error)
-}
-
-// OnSessionOpen called when a session is opened.
-func (sh *serverHandler) OnSessionOpen(_ *gortsplib.ServerHandlerOnSessionOpenCtx) {
-	log.Printf("session opened")
-}
-
-// OnSessionClose called when a session is closed.
-func (sh *serverHandler) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
-	log.Printf("session closed")
-
-	sh.mutex.Lock()
-	defer sh.mutex.Unlock()
-
-	// if the session is the publisher,
-	// close the stream and disconnect any reader.
-	if sh.stream != nil && ctx.Session == sh.publisher {
-		sh.stream.Close()
-		sh.stream = nil
-	}
-}
-
-// OnDescribe called when receiving a DESCRIBE request.
-func (sh *serverHandler) OnDescribe(
-	_ *gortsplib.ServerHandlerOnDescribeCtx,
-) (*base.Response, *gortsplib.ServerStream, error) {
-	log.Printf("DESCRIBE request")
-
-	sh.mutex.RLock()
-	defer sh.mutex.RUnlock()
-
-	// no one is publishing yet
-	if sh.stream == nil {
-		return &base.Response{
-			StatusCode: base.StatusNotFound,
-		}, nil, nil
+	if r.stdin == nil {
+		return fmt.Errorf("stdin is nil, FFmpeg process may have terminated")
 	}
 
-	// send medias that are being published to the client
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, sh.stream, nil
-}
-
-// OnAnnounce called when receiving an ANNOUNCE request.
-func (sh *serverHandler) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
-	log.Printf("ANNOUNCE request")
-
-	sh.mutex.Lock()
-	defer sh.mutex.Unlock()
-
-	// disconnect existing publisher
-	if sh.stream != nil {
-		sh.stream.Close()
-		sh.publisher.Close()
+	if r.process == nil || r.process.Process == nil {
+		return fmt.Errorf("FFmpeg process is not running")
 	}
 
-	// create the stream and save the publisher
-	sh.stream = &gortsplib.ServerStream{
-		Server: sh.server,
-		Desc:   ctx.Description,
+	// 检查进程是否仍在运行
+	if r.process.ProcessState != nil && r.process.ProcessState.Exited() {
+		return fmt.Errorf("FFmpeg process has exited with code: %d", r.process.ProcessState.ExitCode())
 	}
-	err := sh.stream.Initialize()
+
+	_, err := r.stdin.Write(data)
 	if err != nil {
-		panic(err)
-	}
-	sh.publisher = ctx.Session
-
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, nil
-}
-
-// OnSetup called when receiving a SETUP request.
-func (sh *serverHandler) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (
-	*base.Response, *gortsplib.ServerStream, error,
-) {
-	log.Printf("SETUP request")
-
-	// SETUP is used by both readers and publishers. In case of publishers, just return StatusOK.
-	if ctx.Session.State() == gortsplib.ServerSessionStatePreRecord {
-		return &base.Response{
-			StatusCode: base.StatusOK,
-		}, nil, nil
+		return fmt.Errorf("write to stdin failed (pipe may be broken): %w", err)
 	}
 
-	sh.mutex.RLock()
-	defer sh.mutex.RUnlock()
-
-	// no one is publishing yet
-	if sh.stream == nil {
-		return &base.Response{
-			StatusCode: base.StatusNotFound,
-		}, nil, nil
-	}
-
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, sh.stream, nil
+	return nil
 }
 
-// OnPlay called when receiving a PLAY request.
-func (sh *serverHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
-	log.Printf("PLAY request")
-
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, nil
-}
-
-// OnRecord called when receiving a RECORD request.
-func (sh *serverHandler) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
-	log.Printf("RECORD request")
-
-	// called when receiving a RTP packet
-	ctx.Session.OnPacketRTPAny(func(medi *description.Media, _ format.Format, pkt *rtp.Packet) {
-		// route the RTP packet to all readers
-		err := sh.stream.WritePacketRTP(medi, pkt)
-		if err != nil {
-			log.Printf("ERR: %v", err)
-		}
-	})
-
-	return &base.Response{
-		StatusCode: base.StatusOK,
-	}, nil
+// Stop 停止桥接
+func (r *RTSPBridge) Stop() {
+	r.cancel()
+	r.StopFFmpeg()
 }
 
 func main() {
@@ -404,49 +453,50 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-	// 命令行参数
-	baseURL := flag.String("base-url", getEnv("MILOCO_BASE_URL", "https://miloco:8000"), "Base URL of the server")
+	baseURL := flag.String("base-url", getEnv("MILOCO_BASE_URL", "https://miloco:8000"), "Base URL of the Miloco server")
 	username := flag.String("username", getEnv("MILOCO_USERNAME", "admin"), "Login username")
-	password := flag.String("password", getEnv("MILOCO_PASSWORD", ""), "Login password")
+	password := flag.String("password", getEnv("MILOCO_PASSWORD", ""), "Login password (MD5)")
 	cameraID := flag.String("camera-id", getEnv("CAMERA_ID", ""), "Camera ID to stream")
 	channel := flag.String("channel", getEnv("STREAM_CHANNEL", "0"), "Camera channel")
-	videoCodec := flag.String("video-codec", getEnv("VIDEO_CODEC", "hevc"), "Video codec (hevc or h264)")
+	videoCodec := flag.String("video-codec", getEnv("VIDEO_CODEC", "hevc"), "Input video codec (hevc or h264)")
+	rtspPort := flag.String("rtsp-port", getEnv("RTSP_PORT", "8554"), "RTSP server port")
+	debug := flag.Bool("debug", false, "Enable debug logging")
 
 	flag.Parse()
 
+	if *debug {
+		log.SetLevel(logrus.DebugLevel)
+	}
+
 	if *password == "" {
-		log.Fatal("Password is required")
+		log.Error("Password is required")
+		os.Exit(1)
 	}
 
 	if *cameraID == "" {
-		log.Fatal("Camera ID is required")
+		log.Error("Camera ID is required")
+		os.Exit(1)
 	}
 
-	h := &serverHandler{}
-	h.server = &gortsplib.Server{
-		Handler:           h,
-		RTSPAddress:       ":8554",
-		UDPRTPAddress:     ":8000",
-		UDPRTCPAddress:    ":8001",
-		MulticastIPRange:  "224.1.0.0/16",
-		MulticastRTPPort:  8002,
-		MulticastRTCPPort: 8003,
-	}
+	bridge := NewRTSPBridge(*baseURL, *username, *password, *cameraID, *channel, *videoCodec, *rtspPort)
 
-	// 创建客户端
-	client, err := NewWSSClient(*baseURL, *username, *password, *cameraID, *channel, *videoCodec)
-	if err != nil {
-		log.Fatalf("Failed to create WSS client: %v", err)
-	}
+	// 处理中断信号
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// 运行拉流
-	if err := client.Run(); err != nil {
-		log.Fatalf("Stream error: %v", err)
+	go func() {
+		<-sigChan
+		log.Info("Stopped by user")
+		bridge.Stop()
+		os.Exit(0)
+	}()
+
+	if err := bridge.Run(); err != nil {
+		log.Errorf("Error: %v", err)
+		os.Exit(1)
 	}
-	h.server.StartAndWait()
 }
 
-// getEnv 获取环境变量，如果不存在则返回默认值
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
