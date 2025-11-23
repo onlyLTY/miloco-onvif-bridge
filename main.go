@@ -452,7 +452,7 @@ func (r *RTSPBridge) Stop() {
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Warn("Error loading .env file")
 	}
 	baseURL := flag.String("base-url", getEnv("MILOCO_BASE_URL", "https://miloco:8000"), "Base URL of the Miloco server")
 	username := flag.String("username", getEnv("MILOCO_USERNAME", "admin"), "Login username")
