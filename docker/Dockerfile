@@ -11,10 +11,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # 复制剩余源码
 COPY . .
 
-# 构建静态二进制
+# 由 buildx 传入目标平台参数
+ARG TARGETOS
+ARG TARGETARCH
+
+# 构建单个 main 包（注意是 "."，不是 "./..."）
 RUN --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/miloco-onvif-bridge ./...
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/miloco-onvif-bridge .
 
 # ---- Runtime stage ----
 FROM debian:bookworm-slim
@@ -33,7 +37,7 @@ EXPOSE 8554/tcp 8000/tcp 8000/udp 8001/udp 8002/udp 8003/udp
 # 默认环境变量（可在运行时覆盖）
 ENV MILOCO_BASE_URL=https://miloco:8000 \
     MILOCO_USERNAME=admin \
-    MILOCO_PASSWORD=980ac217c6b51e7dc41040bec1edfec8 \
+    MILOCO_PASSWORD="" \
     CAMERA_ID=000000000 \
     STREAM_CHANNEL=0 \
     VIDEO_CODEC=hevc \
