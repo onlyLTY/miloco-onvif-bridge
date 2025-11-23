@@ -1,10 +1,10 @@
-// Package main contains an example.
-package main
+package rtsp
 
 import (
 	"sync"
 
 	"github.com/pion/rtp"
+	"github.com/sirupsen/logrus"
 
 	"github.com/bluenviron/gortsplib/v5"
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
@@ -12,35 +12,44 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 )
 
+var log = logrus.New()
+
+func init() {
+	log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
+	log.SetLevel(logrus.InfoLevel)
+}
+
 // This example shows how to:
 // 1. create a RTSP server which accepts plain connections.
 // 2. allow a single client to publish a stream.
 // 3. allow several clients to read the stream.
 
-type serverHandler struct {
-	server    *gortsplib.Server
+type ServerHandler struct {
+	Server    *gortsplib.Server
 	mutex     sync.RWMutex
 	stream    *gortsplib.ServerStream
 	publisher *gortsplib.ServerSession
 }
 
 // OnConnOpen called when a connection is opened.
-func (sh *serverHandler) OnConnOpen(_ *gortsplib.ServerHandlerOnConnOpenCtx) {
+func (sh *ServerHandler) OnConnOpen(_ *gortsplib.ServerHandlerOnConnOpenCtx) {
 	log.Printf("conn opened")
 }
 
 // OnConnClose called when a connection is closed.
-func (sh *serverHandler) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
+func (sh *ServerHandler) OnConnClose(ctx *gortsplib.ServerHandlerOnConnCloseCtx) {
 	log.Printf("conn closed (%v)", ctx.Error)
 }
 
 // OnSessionOpen called when a session is opened.
-func (sh *serverHandler) OnSessionOpen(_ *gortsplib.ServerHandlerOnSessionOpenCtx) {
+func (sh *ServerHandler) OnSessionOpen(_ *gortsplib.ServerHandlerOnSessionOpenCtx) {
 	log.Printf("session opened")
 }
 
 // OnSessionClose called when a session is closed.
-func (sh *serverHandler) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
+func (sh *ServerHandler) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) {
 	log.Printf("session closed")
 
 	sh.mutex.Lock()
@@ -55,7 +64,7 @@ func (sh *serverHandler) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionClo
 }
 
 // OnDescribe called when receiving a DESCRIBE request.
-func (sh *serverHandler) OnDescribe(
+func (sh *ServerHandler) OnDescribe(
 	_ *gortsplib.ServerHandlerOnDescribeCtx,
 ) (*base.Response, *gortsplib.ServerStream, error) {
 	log.Printf("DESCRIBE request")
@@ -77,7 +86,7 @@ func (sh *serverHandler) OnDescribe(
 }
 
 // OnAnnounce called when receiving an ANNOUNCE request.
-func (sh *serverHandler) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
+func (sh *ServerHandler) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (*base.Response, error) {
 	log.Printf("ANNOUNCE request")
 
 	sh.mutex.Lock()
@@ -91,7 +100,7 @@ func (sh *serverHandler) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (
 
 	// create the stream and save the publisher
 	sh.stream = &gortsplib.ServerStream{
-		Server: sh.server,
+		Server: sh.Server,
 		Desc:   ctx.Description,
 	}
 	err := sh.stream.Initialize()
@@ -106,7 +115,7 @@ func (sh *serverHandler) OnAnnounce(ctx *gortsplib.ServerHandlerOnAnnounceCtx) (
 }
 
 // OnSetup called when receiving a SETUP request.
-func (sh *serverHandler) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (
+func (sh *ServerHandler) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (
 	*base.Response, *gortsplib.ServerStream, error,
 ) {
 	log.Printf("SETUP request")
@@ -134,7 +143,7 @@ func (sh *serverHandler) OnSetup(ctx *gortsplib.ServerHandlerOnSetupCtx) (
 }
 
 // OnPlay called when receiving a PLAY request.
-func (sh *serverHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
+func (sh *ServerHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (*base.Response, error) {
 	log.Printf("PLAY request")
 
 	return &base.Response{
@@ -143,7 +152,7 @@ func (sh *serverHandler) OnPlay(_ *gortsplib.ServerHandlerOnPlayCtx) (*base.Resp
 }
 
 // OnRecord called when receiving a RECORD request.
-func (sh *serverHandler) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
+func (sh *ServerHandler) OnRecord(ctx *gortsplib.ServerHandlerOnRecordCtx) (*base.Response, error) {
 	log.Printf("RECORD request")
 
 	// called when receiving a RTP packet

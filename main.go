@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"miloco_onvif_bridge/internal/rtsp"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -465,8 +466,8 @@ func main() {
 
 	flag.Parse()
 
-	h := &serverHandler{}
-	h.server = &gortsplib.Server{
+	h := &rtsp.ServerHandler{}
+	h.Server = &gortsplib.Server{
 		Handler:           h,
 		RTSPAddress:       ":8554",
 		UDPRTPAddress:     ":8000",
@@ -476,7 +477,7 @@ func main() {
 		MulticastRTCPPort: 8003,
 	}
 	go func() {
-		h.server.StartAndWait()
+		h.Server.StartAndWait()
 	}()
 
 	time.Sleep(10 * time.Second)
