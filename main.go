@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"miloco_onvif_bridge/internal/onvif"
 	"miloco_onvif_bridge/internal/rtsp"
 	"net/http"
 	"net/http/cookiejar"
@@ -479,6 +480,13 @@ func main() {
 	go func() {
 		h.Server.StartAndWait()
 	}()
+
+	onvif.Start(onvif.Config{
+		HTTPListen: ":8000",   // ONVIF HTTP 端口
+		RTSPPort:   *rtspPort, // 你的 RTSP 端口
+		StreamName: "live",    // 你的流路径 /live
+		Logger:     log,       // 你刚才用的 logrus 全局 log
+	})
 
 	time.Sleep(10 * time.Second)
 	if *debug {

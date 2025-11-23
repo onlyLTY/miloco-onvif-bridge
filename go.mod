@@ -3,6 +3,7 @@ module miloco_onvif_bridge
 go 1.25
 
 require (
+	github.com/AlexxIT/go2rtc v1.9.12
 	github.com/bluenviron/gortsplib/v5 v5.2.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
@@ -18,7 +19,7 @@ require (
 	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/sdp/v3 v3.0.16 // indirect
 	github.com/pion/srtp/v3 v3.0.8 // indirect
-	github.com/pion/transport/v3 v3.0.7 // indirect
+	github.com/pion/transport/v3 v3.0.8 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 )
