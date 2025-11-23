@@ -153,7 +153,7 @@ func (r *RTSPBridge) StartFFMpeg() error {
 		fmt.Sprintf("rtsp://127.0.0.1:%s/live", r.rtspPort),
 	}
 
-	r.process = exec.CommandContext(r.ctx, "D:\\Program_Private\\ffmpeg\\ffmpeg.exe", args...)
+	r.process = exec.CommandContext(r.ctx, "ffmpeg", args...)
 
 	stdin, err := r.process.StdinPipe()
 	if err != nil {

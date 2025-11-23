@@ -1,0 +1,13 @@
+services:
+  miloco-onvif-bridge:
+    image: 0nlylty/miloco-onvif-bridge:latest
+    container_name: miloco-onvif-bridge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - MILOCO_BASE_URL=https://miloco.com:8000 # 把miloco改成你部署miloco的地址，如果是本地部署，则填127.0.0.1
+      - MILOCO_PASSWORD=980ac217c6b51e7dc41040bec1edfec8 # miloco设置的6位访问码的MD5值
+      - CAMERA_ID=655819892 # 相机ID 在miloco可以找到
+      - STREAM_CHANNEL=0
+      - VIDEO_CODEC=hevc
+      - RTSP_PORT=8554
