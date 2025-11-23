@@ -461,6 +461,7 @@ func main() {
 	channel := flag.String("channel", getEnv("STREAM_CHANNEL", "0"), "Camera channel")
 	videoCodec := flag.String("video-codec", getEnv("VIDEO_CODEC", "hevc"), "Input video codec (hevc or h264)")
 	rtspPort := flag.String("rtsp-port", getEnv("RTSP_PORT", "8554"), "RTSP server port")
+	onvifPort := flag.String("onvif-port", getEnv("ONVIF_PORT", "8000"), "ONVIF HTTP port")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
 	flag.Parse()
@@ -470,7 +471,7 @@ func main() {
 	}
 	h.Server = &gortsplib.Server{
 		Handler:           h,
-		RTSPAddress:       ":8554",
+		RTSPAddress:       *rtspPort,
 		UDPRTPAddress:     ":8000",
 		UDPRTCPAddress:    ":8001",
 		MulticastIPRange:  "224.1.0.0/16",
@@ -493,10 +494,10 @@ func main() {
 	}()
 
 	onvif.Start(onvif.Config{
-		HTTPListen: ":8000",   // ONVIF HTTP 端口
-		RTSPPort:   *rtspPort, // 你的 RTSP 端口
-		StreamName: "live",    // 你的流路径 /live
-		Logger:     log,       // 你刚才用的 logrus 全局 log
+		HTTPListen: *onvifPort, // ONVIF HTTP 端口
+		RTSPPort:   *rtspPort,  // 你的 RTSP 端口
+		StreamName: "live",     // 你的流路径 /live
+		Logger:     log,        // 你刚才用的 logrus 全局 log
 	})
 
 	<-ready

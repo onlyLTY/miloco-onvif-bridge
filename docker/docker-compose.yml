@@ -11,3 +11,4 @@ services:
       - STREAM_CHANNEL=0
       - VIDEO_CODEC=hevc
       - RTSP_PORT=8554
+      - ONVIF_PORT=9000

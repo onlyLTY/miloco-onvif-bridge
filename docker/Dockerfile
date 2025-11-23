@@ -44,6 +44,7 @@ ENV MILOCO_BASE_URL=https://miloco:8000 \
     CAMERA_ID=000000000 \
     STREAM_CHANNEL=0 \
     VIDEO_CODEC=hevc \
-    RTSP_PORT=8554
+    RTSP_PORT=8554 \
+    ONVIF_PORT=9000
 
 ENTRYPOINT ["/usr/local/bin/miloco-onvif-bridge"]
