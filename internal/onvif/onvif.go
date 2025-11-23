@@ -54,7 +54,7 @@ func Start(cfg Config) error {
 	})
 
 	go func() {
-		log.Infof("[onvif] HTTP server listen on %s", cfg.HTTPListen)
+		log.Infof("[onvif] 服务启动。监听端口 %s", cfg.HTTPListen)
 		if err := http.ListenAndServe(cfg.HTTPListen, nil); err != nil {
 			log.Errorf("[onvif] HTTP server error: %v", err)
 		}

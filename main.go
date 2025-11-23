@@ -139,7 +139,7 @@ func (r *RTSPBridge) StartFFMpeg() error {
 	// FFMpeg 命令:作为 RTSP 服务端监听端口
 	args := []string{
 		"-y",
-		"-v", "warning", // 改为 warning 级别以获取更多信息
+		"-v", "error",
 		"-hide_banner",
 		"-use_wallclock_as_timestamps", "1",
 		"-analyzeduration", "20000000",
@@ -152,8 +152,6 @@ func (r *RTSPBridge) StartFFMpeg() error {
 		"-rtsp_transport", "tcp",
 		fmt.Sprintf("rtsp://127.0.0.1:%s/live", r.rtspPort),
 	}
-
-	log.Debug("Starting FFMpeg as RTSP server on port %s: ffmpeg %s", r.rtspPort, strings.Join(args, " "))
 
 	r.process = exec.CommandContext(r.ctx, "D:\\Program_Private\\ffmpeg\\ffmpeg.exe", args...)
 
@@ -208,7 +206,7 @@ func (r *RTSPBridge) StartFFMpeg() error {
 	// 等待 FFMpeg 启动
 	time.Sleep(2 * time.Second)
 
-	log.Infof("FFMpeg started. RTSP stream available at rtsp://<your-ip>:%s/live", r.rtspPort)
+	log.Infof("FFMpeg启动。RTSP stream 已可用 rtsp://<your-ip>:%s/live", r.rtspPort)
 	return nil
 }
 
@@ -329,7 +327,7 @@ func (r *RTSPBridge) Run() error {
 	wsURL := fmt.Sprintf("%s://%s/api/miot/ws/video_stream?camera_id=%s&channel=%s",
 		protocol, host, r.cameraID, r.channel)
 
-	log.Infof("Connecting to WebSocket: %s", wsURL)
+	log.Infof("连接miloco wss成功: %s", wsURL)
 
 	// 创建 WebSocket 拨号器
 	dialer := websocket.Dialer{
@@ -389,7 +387,7 @@ func (r *RTSPBridge) Run() error {
 			// 等待关键帧
 			if r.waitingForKeyframe {
 				if r.IsKeyframe(message) {
-					log.Info("Keyframe detected! Starting stream...")
+					log.Info("服务启动。可以添加到nvr软件...")
 					r.waitingForKeyframe = false
 				} else {
 					log.Debug("Skipping non-keyframe data...")
