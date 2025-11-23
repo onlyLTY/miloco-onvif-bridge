@@ -494,10 +494,10 @@ func main() {
 	}()
 
 	onvif.Start(onvif.Config{
-		HTTPListen: *onvifPort, // ONVIF HTTP 端口
-		RTSPPort:   *rtspPort,  // 你的 RTSP 端口
-		StreamName: "live",     // 你的流路径 /live
-		Logger:     log,        // 你刚才用的 logrus 全局 log
+		HTTPListen: ":" + *onvifPort, // ONVIF HTTP 端口
+		RTSPPort:   *rtspPort,        // 你的 RTSP 端口
+		StreamName: "live",           // 你的流路径 /live
+		Logger:     log,              // 你刚才用的 logrus 全局 log
 	})
 
 	<-ready
