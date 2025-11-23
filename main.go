@@ -471,7 +471,7 @@ func main() {
 	}
 	h.Server = &gortsplib.Server{
 		Handler:           h,
-		RTSPAddress:       *rtspPort,
+		RTSPAddress:       ":" + *rtspPort,
 		UDPRTPAddress:     ":8000",
 		UDPRTCPAddress:    ":8001",
 		MulticastIPRange:  "224.1.0.0/16",
