@@ -71,6 +71,8 @@ func makeHandler(cfg Config, log *logrus.Logger) http.HandlerFunc {
 			return
 		}
 
+		log.Debugf("[onvif] request %s %s %s", r.Method, r.RequestURI, string(b))
+
 		operation := onvif.GetRequestAction(b)
 		if operation == "" {
 			http.Error(w, "malformed request body", http.StatusBadRequest)
