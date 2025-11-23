@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # ---- Build stage ----
 FROM golang:1.25-alpine AS builder
 
@@ -21,12 +23,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags="-s -w" -o /out/miloco-onvif-bridge .
 
 # ---- Runtime stage ----
-FROM debian:bookworm-slim
+FROM alpine:3.20
 
-# 安装运行时依赖与 ffmpeg
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg ca-certificates tzdata && \
-    rm -rf /var/lib/apt/lists/*
+# 安装运行时依赖与 ffmpeg（使用 --no-cache 避免缓存垃圾）
+RUN apk add --no-cache ffmpeg ca-certificates tzdata
+
+# 运行目录
+WORKDIR /data
 
 # 复制构建产物
 COPY --from=builder /out/miloco-onvif-bridge /usr/local/bin/miloco-onvif-bridge
