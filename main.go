@@ -359,12 +359,14 @@ func (r *RTSPBridge) Run() error {
 	// 设置读取超时
 	ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 
+	times := 0
 	for {
 		select {
 		case <-r.ctx.Done():
 			return nil
 		default:
 		}
+		times++
 
 		messageType, message, err := ws.ReadMessage()
 		if err != nil {
@@ -380,7 +382,7 @@ func (r *RTSPBridge) Run() error {
 
 		if messageType == websocket.BinaryMessage {
 			dataLen := len(message)
-			if dataLen >= 100 {
+			if dataLen >= 100 && times%100 == 0 {
 				log.Debugf("Received binary data: %d bytes", dataLen)
 			}
 
