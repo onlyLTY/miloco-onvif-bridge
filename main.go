@@ -134,9 +134,9 @@ func (r *RTSPBridge) Login() error {
 	return nil
 }
 
-// StartFFmpeg 启动 FFmpeg 作为 RTSP 服务端
-func (r *RTSPBridge) StartFFmpeg() error {
-	// FFmpeg 命令:作为 RTSP 服务端监听端口
+// StartFFMpeg 启动 FFMpeg 作为 RTSP 服务端
+func (r *RTSPBridge) StartFFMpeg() error {
+	// FFMpeg 命令:作为 RTSP 服务端监听端口
 	args := []string{
 		"-y",
 		"-v", "warning", // 改为 warning 级别以获取更多信息
@@ -153,7 +153,7 @@ func (r *RTSPBridge) StartFFmpeg() error {
 		fmt.Sprintf("rtsp://127.0.0.1:%s/live", r.rtspPort),
 	}
 
-	log.Infof("Starting FFmpeg as RTSP server on port %s: ffmpeg %s", r.rtspPort, strings.Join(args, " "))
+	log.Debug("Starting FFMpeg as RTSP server on port %s: ffmpeg %s", r.rtspPort, strings.Join(args, " "))
 
 	r.process = exec.CommandContext(r.ctx, "D:\\Program_Private\\ffmpeg\\ffmpeg.exe", args...)
 
@@ -180,24 +180,24 @@ func (r *RTSPBridge) StartFFmpeg() error {
 		for {
 			n, err := scanner.Read(buf)
 			if n > 0 {
-				log.Warnf("FFmpeg: %s", string(buf[:n]))
+				log.Warnf("FFMpeg: %s", string(buf[:n]))
 			}
 			if err != nil {
 				if err != io.EOF {
-					log.Errorf("Error reading FFmpeg stderr: %v", err)
+					log.Errorf("Error reading FFMpeg stderr: %v", err)
 				}
 				break
 			}
 		}
 	}()
 
-	// 监控 FFmpeg 进程状态
+	// 监控 FFMpeg 进程状态
 	go func() {
 		err := r.process.Wait()
 		if err != nil {
-			log.Errorf("FFmpeg process exited with error: %v", err)
+			log.Errorf("FFMpeg process exited with error: %v", err)
 		} else {
-			log.Warn("FFmpeg process exited normally")
+			log.Warn("FFMpeg process exited normally")
 		}
 		r.mu.Lock()
 		r.stdin = nil
@@ -205,15 +205,15 @@ func (r *RTSPBridge) StartFFmpeg() error {
 		r.mu.Unlock()
 	}()
 
-	// 等待 FFmpeg 启动
+	// 等待 FFMpeg 启动
 	time.Sleep(2 * time.Second)
 
-	log.Infof("FFmpeg started. RTSP stream available at rtsp://<your-ip>:%s/live", r.rtspPort)
+	log.Infof("FFMpeg started. RTSP stream available at rtsp://<your-ip>:%s/live", r.rtspPort)
 	return nil
 }
 
-// StopFFmpeg 停止 FFmpeg 进程
-func (r *RTSPBridge) StopFFmpeg() {
+// StopFFMpeg 停止 FFMpeg 进程
+func (r *RTSPBridge) StopFFMpeg() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -233,9 +233,9 @@ func (r *RTSPBridge) StopFFmpeg() {
 
 		select {
 		case <-done:
-			log.Info("FFmpeg process terminated gracefully")
+			log.Info("FFMpeg process terminated gracefully")
 		case <-time.After(5 * time.Second):
-			log.Warn("FFmpeg process did not terminate, killing...")
+			log.Warn("FFMpeg process did not terminate, killing...")
 			r.process.Process.Kill()
 		}
 
@@ -309,10 +309,10 @@ func (r *RTSPBridge) isHEVCKeyframe(data []byte) bool {
 
 // Run 主循环:连接 WebSocket 并传输数据
 func (r *RTSPBridge) Run() error {
-	if err := r.StartFFmpeg(); err != nil {
+	if err := r.StartFFMpeg(); err != nil {
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
-	defer r.StopFFmpeg()
+	defer r.StopFFMpeg()
 
 	if err := r.Login(); err != nil {
 		return fmt.Errorf("login: %w", err)
@@ -397,44 +397,44 @@ func (r *RTSPBridge) Run() error {
 				}
 			}
 
-			// 写入数据到 FFmpeg stdin
+			// 写入数据到 FFMpeg stdin
 			if err := r.WriteData(message); err != nil {
-				log.Errorf("Failed to write data to FFmpeg: %v", err)
-				log.Info("Attempting to restart FFmpeg...")
+				log.Errorf("Failed to write data to FFMpeg: %v", err)
+				log.Info("Attempting to restart FFMpeg...")
 
-				// 尝试重启 FFmpeg
-				r.StopFFmpeg()
+				// 尝试重启 FFMpeg
+				r.StopFFMpeg()
 				time.Sleep(1 * time.Second)
 
-				if err := r.StartFFmpeg(); err != nil {
-					return fmt.Errorf("failed to restart FFmpeg: %w", err)
+				if err := r.StartFFMpeg(); err != nil {
+					return fmt.Errorf("failed to restart FFMpeg: %w", err)
 				}
 
 				// 重新等待关键帧
 				r.waitingForKeyframe = true
-				log.Info("FFmpeg restarted, waiting for keyframe...")
+				log.Info("FFMpeg restarted, waiting for keyframe...")
 				continue
 			}
 		}
 	}
 }
 
-// WriteData 写入数据到 FFmpeg stdin
+// WriteData 写入数据到 FFMpeg stdin
 func (r *RTSPBridge) WriteData(data []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.stdin == nil {
-		return fmt.Errorf("stdin is nil, FFmpeg process may have terminated")
+		return fmt.Errorf("stdin is nil, FFMpeg process may have terminated")
 	}
 
 	if r.process == nil || r.process.Process == nil {
-		return fmt.Errorf("FFmpeg process is not running")
+		return fmt.Errorf("FFMpeg process is not running")
 	}
 
 	// 检查进程是否仍在运行
 	if r.process.ProcessState != nil && r.process.ProcessState.Exited() {
-		return fmt.Errorf("FFmpeg process has exited with code: %d", r.process.ProcessState.ExitCode())
+		return fmt.Errorf("FFMpeg process has exited with code: %d", r.process.ProcessState.ExitCode())
 	}
 
 	_, err := r.stdin.Write(data)
@@ -448,7 +448,7 @@ func (r *RTSPBridge) WriteData(data []byte) error {
 // Stop 停止桥接
 func (r *RTSPBridge) Stop() {
 	r.cancel()
-	r.StopFFmpeg()
+	r.StopFFMpeg()
 }
 
 func main() {
@@ -467,7 +467,9 @@ func main() {
 
 	flag.Parse()
 
-	h := &rtsp.ServerHandler{}
+	h := &rtsp.ServerHandler{
+		Logger: log,
+	}
 	h.Server = &gortsplib.Server{
 		Handler:           h,
 		RTSPAddress:       ":8554",
@@ -477,8 +479,19 @@ func main() {
 		MulticastRTPPort:  8002,
 		MulticastRTCPPort: 8003,
 	}
+
+	ready := make(chan struct{})
 	go func() {
-		h.Server.StartAndWait()
+		err := h.Server.Start()
+		if err != nil {
+			panic(err)
+		}
+		log.Infof("RTSP server started on %s", h.Server.RTSPAddress)
+		close(ready)
+		err = h.Server.Wait()
+		if err != nil {
+			panic(err)
+		}
 	}()
 
 	onvif.Start(onvif.Config{
@@ -488,7 +501,7 @@ func main() {
 		Logger:     log,       // 你刚才用的 logrus 全局 log
 	})
 
-	time.Sleep(10 * time.Second)
+	<-ready
 	if *debug {
 		log.SetLevel(logrus.DebugLevel)
 	}
