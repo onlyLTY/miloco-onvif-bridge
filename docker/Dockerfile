@@ -49,7 +49,7 @@ ENV MILOCO_BASE_URL=https://miloco:8000 \
     UDP_RTP_PORT=8000 \
     UDP_RTCP_PORT=8001 \
     MULTICAST_RTP_PORT=8002 \
-    MULTICAST_RTCP_PORT=8003 \
+    MULTICAST_RTCP_PORT=8003
 
 
 ENTRYPOINT ["/usr/local/bin/miloco-onvif-bridge"]
