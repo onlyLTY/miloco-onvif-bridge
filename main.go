@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -464,6 +465,20 @@ func main() {
 	videoCodec := flag.String("video-codec", getEnv("VIDEO_CODEC", "hevc"), "Input video codec (hevc or h264)")
 	rtspPort := flag.String("rtsp-port", getEnv("RTSP_PORT", "8554"), "RTSP server port")
 	onvifPort := flag.String("onvif-port", getEnv("ONVIF_PORT", "8000"), "ONVIF HTTP port")
+	udpRTPPort := flag.String("udp-rtp-port", getEnv("UDP_RTP_PORT", "8000"), "UDP RTP port")
+	udpRTCPPort := flag.String("udp-rtcp-port", getEnv("UDP_RTCP_PORT", "8001"), "UDP RTCP port")
+	multicastRTPPortStr := getEnv("MULTICAST_RTP_PORT", "8002")
+	multicastRTPPortNum, err := strconv.Atoi(multicastRTPPortStr)
+	if err != nil {
+		panic(err)
+	}
+	multicastRTPPort := flag.Int("multicast-rtp-port", multicastRTPPortNum, "Multicast RTP port")
+	multicastRTCPPortStr := getEnv("MULTICAST_RTCP_PORT", "8003")
+	multicastRTCPPortNum, err := strconv.Atoi(multicastRTCPPortStr)
+	if err != nil {
+		panic(err)
+	}
+	multicastRTCPPort := flag.Int("multicast-rtcp-port", multicastRTCPPortNum, "Multicast RTCP port")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
 	flag.Parse()
@@ -474,11 +489,11 @@ func main() {
 	h.Server = &gortsplib.Server{
 		Handler:           h,
 		RTSPAddress:       ":" + *rtspPort,
-		UDPRTPAddress:     ":8000",
-		UDPRTCPAddress:    ":8001",
+		UDPRTPAddress:     ":" + *udpRTPPort,
+		UDPRTCPAddress:    ":" + *udpRTCPPort,
 		MulticastIPRange:  "224.1.0.0/16",
-		MulticastRTPPort:  8002,
-		MulticastRTCPPort: 8003,
+		MulticastRTPPort:  *multicastRTPPort,
+		MulticastRTCPPort: *multicastRTCPPort,
 	}
 
 	ready := make(chan struct{})
