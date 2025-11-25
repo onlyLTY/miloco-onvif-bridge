@@ -1,6 +1,7 @@
 package onvif
 
 import (
+	"embed"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
+
+//go:embed assets/snapshot.jpg
+var snapshotFS embed.FS
 
 // Config 用来配置 ONVIF Server
 type Config struct {
@@ -60,6 +64,7 @@ func Start(cfg Config) error {
 	handler := makeHandler(cfg, log)
 	http.HandleFunc("/onvif/device_service", handler)
 	http.HandleFunc("/onvif/media_service", handler)
+	http.HandleFunc("/snapshot.jpg", serveSnapshot(log))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// 先判断是不是 WebSocket 握手请求
 		if websocket.IsWebSocketUpgrade(r) {
@@ -333,4 +338,26 @@ func buildProbeMatches(cfg Config, probeXML string) string {
 </SOAP-ENV:Envelope>`, messageID, relatesTo, endpoint, xaddrs)
 
 	return reply
+}
+
+// serveSnapshot 直接返回 embed 的 snapshot.jpg
+func serveSnapshot(log *logrus.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Debugf("[onvif] snapshot request: %s %s", r.Method, r.RequestURI)
+
+		f, err := snapshotFS.Open("assets/snapshot.jpg")
+		if err != nil {
+			log.Errorf("[onvif] cannot open embedded snapshot: %v", err)
+			http.Error(w, "snapshot not available", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.WriteHeader(http.StatusOK)
+
+		if _, err := io.Copy(w, f); err != nil {
+			log.Errorf("[onvif] write snapshot error: %v", err)
+		}
+	}
 }
