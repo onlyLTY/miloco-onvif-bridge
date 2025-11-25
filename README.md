@@ -17,6 +17,7 @@
 - STREAM_CHANNEL：视频通道编号（默认：0）
 - VIDEO_CODEC：输入视频编码 hevc 或 h264（默认：hevc）
 - RTSP_PORT： RTSP 端口（默认：8554）
+- DEVICE_IP：Docker部署设备的ip，用于ONVIF设备连接（如：192.168.31.66）
 
 快速开始（本机）
 1) 准备环境变量（复制 .env.example 为 .env 并填写）  
