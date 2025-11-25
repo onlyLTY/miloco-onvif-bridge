@@ -479,6 +479,7 @@ func main() {
 		panic(err)
 	}
 	multicastRTCPPort := flag.Int("multicast-rtcp-port", multicastRTCPPortNum, "Multicast RTCP port")
+	deviceIp := flag.String("device-ip", getEnv("DEVICE_IP", ""), "Device IP address (optional)")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
 	flag.Parse()
@@ -515,6 +516,7 @@ func main() {
 		RTSPPort:   *rtspPort,        // 你的 RTSP 端口
 		StreamName: "live",           // 你的流路径 /live
 		Logger:     log,              // 你刚才用的 logrus 全局 log
+		DeviceIP:   *deviceIp,
 	})
 
 	<-ready

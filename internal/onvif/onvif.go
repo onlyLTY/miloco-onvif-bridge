@@ -1,9 +1,11 @@
 package onvif
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/AlexxIT/go2rtc/pkg/onvif"
 	"github.com/gorilla/websocket"
@@ -23,6 +25,9 @@ type Config struct {
 
 	// 日志，不传则用一个新的 logrus.Logger
 	Logger *logrus.Logger
+
+	// 设备ip
+	DeviceIP string
 }
 
 var upgrader = websocket.Upgrader{
@@ -101,6 +106,13 @@ func Start(cfg Config) error {
 		log.Infof("[onvif] 服务启动。监听端口 %s", cfg.HTTPListen)
 		if err := http.ListenAndServe(cfg.HTTPListen, nil); err != nil {
 			log.Errorf("[onvif] HTTP server error: %v", err)
+		}
+	}()
+
+	go func() {
+		log.Infof("[wsd] WS-Discovery 服务启动 (UDP 3702)")
+		if err := startWSDiscovery(cfg, log); err != nil {
+			log.Errorf("[wsd] WS-Discovery error: %v", err)
 		}
 	}()
 
@@ -214,4 +226,111 @@ func makeHandler(cfg Config, log *logrus.Logger) http.HandlerFunc {
 			log.Errorf("[onvif] write response error: %v", err)
 		}
 	}
+}
+
+// startWSDiscovery 作为 WS-Discovery 服务端：
+// 监听 0.0.0.0:3702，收到 Probe 就回 ProbeMatches
+func startWSDiscovery(cfg Config, log *logrus.Logger) error {
+	addr := &net.UDPAddr{
+		IP:   net.IPv4zero,
+		Port: 3702,
+	}
+
+	conn, err := net.ListenUDP("udp4", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	log.Infof("[wsd] listening on %s", addr.String())
+
+	buf := make([]byte, 8192)
+
+	for {
+		n, remote, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			log.Errorf("[wsd] ReadFromUDP error: %v", err)
+			continue
+		}
+
+		data := buf[:n]
+		text := string(data)
+
+		// 只处理包含 Probe 的请求，其他忽略
+		if !strings.Contains(text, "Probe") {
+			log.Debugf("[wsd] 收到非 Probe 请求: %s", text)
+			continue
+		}
+
+		log.Infof("[wsd] 收到 Probe 来自 %s", remote.String())
+
+		reply := buildProbeMatches(cfg, text)
+
+		if _, err := conn.WriteToUDP([]byte(reply), remote); err != nil {
+			log.Errorf("[wsd] WriteToUDP error: %v", err)
+			continue
+		}
+
+		log.Infof("[wsd] 已回复 ProbeMatches 给 %s", remote.String())
+	}
+}
+
+// buildProbeMatches 根据收到的 Probe XML 构造最小可用的 ProbeMatches 响应
+func buildProbeMatches(cfg Config, probeXML string) string {
+	// 对方的 MessageID → 放到 RelatesTo 里，规范一点
+	relatesTo := onvif.FindTagValue([]byte(probeXML), "MessageID")
+	if relatesTo == "" {
+		relatesTo = "urn:uuid:" + onvif.UUID()
+	}
+
+	// 自己的 EPR（随便一个 UUID）
+	endpoint := "urn:uuid:" + onvif.UUID()
+	messageID := "urn:uuid:" + onvif.UUID()
+
+	ip := cfg.DeviceIP
+	if ip == "" {
+		ip = "127.0.0.1"
+		logrus.Warnf("Device IP not provided, using default: %s", ip)
+	}
+
+	port := strings.TrimPrefix(cfg.HTTPListen, ":")
+	if port == "" {
+		port = "8000"
+	}
+
+	xaddrs := fmt.Sprintf("http://%s:%s/onvif/device_service", ip, port)
+
+	// 非常简化的 ProbeMatches，够大多数 NVR/客户端用
+	reply := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope
+  xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"
+  xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+  xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+  xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <SOAP-ENV:Header>
+    <wsa:MessageID>%s</wsa:MessageID>
+    <wsa:RelatesTo>%s</wsa:RelatesTo>
+    <wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>
+    <wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches</wsa:Action>
+  </SOAP-ENV:Header>
+  <SOAP-ENV:Body>
+    <wsd:ProbeMatches>
+      <wsd:ProbeMatch>
+        <wsa:EndpointReference>
+          <wsa:Address>%s</wsa:Address>
+        </wsa:EndpointReference>
+        <wsd:Types>dn:NetworkVideoTransmitter</wsd:Types>
+        <wsd:Scopes>
+          onvif://www.onvif.org/name/miloco-bridge
+          onvif://www.onvif.org/location/local
+          onvif://www.onvif.org/type/Network_Video_Transmitter
+        </wsd:Scopes>
+        <wsd:XAddrs>%s</wsd:XAddrs>
+        <wsd:MetadataVersion>1</wsd:MetadataVersion>
+      </wsd:ProbeMatch>
+    </wsd:ProbeMatches>
+  </SOAP-ENV:Body>
+</SOAP-ENV:Envelope>`, messageID, relatesTo, endpoint, xaddrs)
+
+	return reply
 }
