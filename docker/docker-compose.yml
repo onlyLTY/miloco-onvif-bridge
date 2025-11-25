@@ -16,3 +16,4 @@ services:
       - UDP_RTCP_PORT=8001
       - MULTICAST_RTP_PORT=8002
       - MULTICAST_RTCP_PORT=8003
+      - DEVICE_IP=127.0.0.1
