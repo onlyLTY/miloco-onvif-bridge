@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/AlexxIT/go2rtc/pkg/onvif"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -22,6 +23,13 @@ type Config struct {
 
 	// 日志，不传则用一个新的 logrus.Logger
 	Logger *logrus.Logger
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		// NVR 一般不会带浏览器的 Origin，这里直接放行
+		return true
+	},
 }
 
 // Start 启动 ONVIF HTTP 服务（异步，不阻塞）
@@ -48,9 +56,45 @@ func Start(cfg Config) error {
 	http.HandleFunc("/onvif/device_service", handler)
 	http.HandleFunc("/onvif/media_service", handler)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// 先判断是不是 WebSocket 握手请求
+		if websocket.IsWebSocketUpgrade(r) {
+			log.Infof("[onvif] WebSocket upgrade 请求: %s %s", r.Method, r.URL.Path)
+
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				log.Errorf("[onvif] WebSocket upgrade 失败: %v", err)
+				return
+			}
+
+			log.Infof("[onvif] WebSocket 已连接，path=%s", r.URL.Path)
+
+			// 简单读写一下，防止立刻断开，可以顺便看对端发了什么
+			go func() {
+				defer conn.Close()
+
+				for {
+					mt, msg, err := conn.ReadMessage()
+					if err != nil {
+						log.Infof("[onvif] WebSocket 连接关闭 path=%s err=%v", r.URL.Path, err)
+						return
+					}
+					log.Debugf("[onvif] WS 收到消息 path=%s type=%d msg=%s", r.URL.Path, mt, string(msg))
+
+					// 回个心跳之类的，防止 NVR 报错
+					if err := conn.WriteMessage(websocket.TextMessage, []byte("ok")); err != nil {
+						log.Errorf("[onvif] WS 写入失败 path=%s err=%v", r.URL.Path, err)
+						return
+					}
+				}
+			}()
+
+			return
+		}
+
+		// 不是 WebSocket，就按原来的 404 处理
 		log.Warnf("[onvif] unknown path: %s %s", r.Method, r.RequestURI)
 		w.WriteHeader(404)
-		w.Write([]byte("unknown ONVIF endpoint\n"))
+		_, _ = w.Write([]byte("unknown ONVIF endpoint\n"))
 	})
 
 	go func() {
